@@ -1,15 +1,15 @@
-AI Safety Map Monitor
-Overview
+# AI Safety Map Monitor
+### Overview
 
 AI Safety Map Monitor is a web-based prototype designed to explore real-time safety awareness using live geolocation data, dynamic geofencing, and AI-assisted reasoning. The system evaluates a user’s immediate surroundings and classifies areas into Safe, Moderate, or Danger zones, updating continuously as the user moves.
 
 The project is implemented as a front-end–heavy MVP with Firebase-backed persistence and a Gemini-powered reasoning interface to explain safety classifications.
 
-System Architecture
+### System Architecture
 
 The application follows a client-driven architecture optimized for rapid prototyping:
 
-Browser (HTML/CSS/JS)
+## Browser (HTML/CSS/JS)
   ├── Google Maps API (visualization, geofencing)
   ├── Geolocation API (live position tracking)
   ├── Local state (risk score, zone, context)
@@ -19,7 +19,7 @@ Browser (HTML/CSS/JS)
 
 Emergency notification logic is architected to be server-driven (via Firebase Cloud Functions) but may be simulated during demos.
 
-Core Components
+### Core Components
 1. Location Tracking and Geofencing
 
 Uses the browser Geolocation API with high-accuracy mode
@@ -58,7 +58,7 @@ Emergency contacts stored in Firebase Firestore
 
 SMS delivery architecture supported via Firebase Cloud Functions
 
-Data Flow
+### Data Flow
 
 User location is obtained from the browser
 
@@ -70,7 +70,7 @@ Gemini receives contextual prompts for explanation
 
 SOS workflow accesses contacts from Firestore when triggered
 
-Technology Stack
+### Technology Stack
 
 Google Maps JavaScript API
 
@@ -92,7 +92,7 @@ Emergency contacts stored securely in Firestore
 
 Client-side Gemini usage limited to MVP scope
 
-Project Status
+### Project Status
 
 This project is a hackathon MVP and research prototype. Certain components, including risk models and emergency messaging, are simplified to demonstrate system design rather than full production readiness.
 
@@ -108,6 +108,6 @@ Expanded emergency communication channels
 
 City-scale analytics dashboards
 
-License
+### License
 
-MIT License
+## MIT License
