@@ -3,32 +3,28 @@
  ************************************************/
 let map;
 let userMarker;
-let safetyCircle;
+let safetyCircle; // The blue bubble showing GPS accuracy around you
+
+// 🔥 NEW: Fixed Danger Zone State
+let dangerZoneCircle;      // The static red circle on the map
+let dangerZoneCenter = null; 
+const DANGER_RADIUS = 100; // 100 meters fixed radius
 
 // Overlay state
 let overlayActive = false;
 let overlayElements = [];
-let overlayTimeout = null;
 
-// Geofence config (DYNAMIC)
-const GEOFENCE_RADIUS = 150; // meters
-let geofenceCenter = null;   // ✅ FIX: dynamic center
-
-let wasInsideGeofence = null;
-
-// Sensor history (for SOS logic later)
+// Sensor history & SOS
 let lastSpeed = null;
 let lastAltitude = null;
 let lastTimestamp = null;
-
-// SOS lock
 let sosTriggered = false;
 
 /************************************************
- * INIT MAP (CALLED BY GOOGLE MAPS)
+ * 1. INIT MAP
  ************************************************/
 function initMap() {
-  const defaultLoc = { lat: 22.5645, lng: 72.9289 }; // fallback only
+  const defaultLoc = { lat: 22.5645, lng: 72.9289 };
 
   map = new google.maps.Map(document.getElementById("map"), {
     zoom: 15,
@@ -36,14 +32,17 @@ function initMap() {
     zoomControl: true,
     mapTypeControl: false,
     fullscreenControl: false,
-    styles: [
-      { featureType: "poi", stylers: [{ visibility: "off" }] }
-    ]
+    styles: [{ featureType: "poi", stylers: [{ visibility: "off" }] }]
   });
 
-  // 🔐 IMPORTANT: only start tracking if monitoring is active
+  // 🔥 ACTION: Click anywhere on the map to create a Danger Zone
+  map.addListener("click", (e) => {
+    createDangerZone(e.latLng);
+  });
+
+  // Check monitoring status
   if (localStorage.getItem("monitoring") !== "active") {
-    console.log("⏸ Monitoring inactive. Location not requested.");
+    console.log("⏸ Monitoring inactive.");
     return;
   }
 
@@ -55,32 +54,52 @@ function initMap() {
   navigator.geolocation.watchPosition(
     onPosition,
     onLocationError,
-    {
-      enableHighAccuracy: true,
-      maximumAge: 30000,
-      timeout: 10000
-    }
+    { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 }
   );
 }
 
 /************************************************
- * LOCATION UPDATE
+ * 2. NEW: CREATE DANGER ZONE FUNCTION
+ ************************************************/
+function createDangerZone(latLng) {
+  dangerZoneCenter = latLng;
+  
+  // Remove old circle if it exists (so we only have one danger zone for testing)
+  if (dangerZoneCircle) dangerZoneCircle.setMap(null);
+
+  // Draw the new static Red Zone (100m)
+  dangerZoneCircle = new google.maps.Circle({
+    strokeColor: "#FF0000",
+    strokeOpacity: 0.8,
+    strokeWeight: 2,
+    fillColor: "#FF0000",
+    fillOpacity: 0.35,
+    map: map,
+    center: latLng,
+    radius: DANGER_RADIUS, // 100 meters
+  });
+
+  console.log("⚠️ New Danger Zone created. Walk into it to test!");
+}
+
+/************************************************
+ * 3. LOCATION UPDATE LOOP
  ************************************************/
 function onPosition(position) {
   const lat = position.coords.latitude;
   const lng = position.coords.longitude;
-  const speed = position.coords.speed || 0;
-  const altitude = position.coords.altitude;
   const accuracy = position.coords.accuracy || 20;
-  const now = Date.now();
+  
+  // Save sensor data (for future SOS features)
+  lastSpeed = position.coords.speed;
+  lastAltitude = position.coords.altitude;
 
   const userLoc = { lat, lng };
+  
+  // Center map on user
   map.setCenter(userLoc);
 
-  // 📍 FIX 1: Geofence ALWAYS follows user
-  geofenceCenter = userLoc;
-
-  // Marker
+  // --- DRAW USER MARKER ---
   if (!userMarker) {
     userMarker = new google.maps.Marker({
       position: userLoc,
@@ -98,113 +117,94 @@ function onPosition(position) {
     userMarker.setPosition(userLoc);
   }
 
-  // Geofence circle
+  // --- DRAW ACCURACY BUBBLE (Visual only) ---
   if (!safetyCircle) {
     safetyCircle = new google.maps.Circle({
       map,
-      center: geofenceCenter,
-      radius: GEOFENCE_RADIUS,
-      fillOpacity: 0.25,
-      strokeWeight: 2
+      center: userLoc,
+      radius: accuracy, 
+      fillOpacity: 0.1,
+      strokeWeight: 1,
+      fillColor: "#4285F4",
+      strokeColor: "#4285F4"
     });
   } else {
-    safetyCircle.setCenter(geofenceCenter);
+    safetyCircle.setCenter(userLoc);
+    safetyCircle.setRadius(accuracy);
   }
 
-  /************************************************
-   * FIX 2: PROPER ZONE CLASSIFICATION
-   * (NO MORE DANGER 24/7)
-   ************************************************/
+  // --- 🔥 LOGIC: AM I IN DANGER? ---
+  let zone = "safe";
+  let score = 90;
+  let color = "#2a9d8f"; // Green
 
-  let zone, color, score;
+  // Check 1: Are we inside the Fixed Danger Zone?
+  if (dangerZoneCenter) {
+    // Calculate distance using Google Geometry Library
+    const distanceToDanger = google.maps.geometry.spherical.computeDistanceBetween(
+      new google.maps.LatLng(userLoc.lat, userLoc.lng),
+      dangerZoneCenter
+    );
 
-  // We use GPS accuracy as a proxy for stability/context for now
-  if (accuracy <= 30) {
-    zone = "safe";
-    color = "#2a9d8f"; // green
-    score = 85;
-  } else if (accuracy <= 70) {
-    zone = "moderate";
-    color = "#e9c46a"; // yellow
-    score = 60;
-  } else {
-    zone = "danger";
-    color = "#e63946"; // red
-    score = 35;
+    console.log(`Distance to Danger Zone: ${Math.round(distanceToDanger)} meters`);
+
+    if (distanceToDanger <= DANGER_RADIUS) {
+      zone = "danger";
+      score = 25;
+      color = "#e63946"; // Red
+    }
   }
 
-  safetyCircle.setOptions({
-    fillColor: color,
-    strokeColor: color
-  });
+  // Check 2: If not in danger zone, check GPS Accuracy (fallback logic)
+  if (zone !== "danger") {
+    if (accuracy > 50) {
+      zone = "moderate";
+      score = 60;
+      color = "#e9c46a"; // Yellow
+    }
+  }
 
+  // Update UI Colors
+  safetyCircle.setOptions({ fillColor: color, strokeColor: color });
+
+  // Save to LocalStorage for other pages to see
   localStorage.setItem("riskLevel", zone);
   localStorage.setItem("safetyScore", score);
 
-  // Overlay (ONLY ONCE)
-  if (!overlayActive) {
+  // Show Overlay if in Danger
+  if (!overlayActive && zone !== "safe") {
     showOverlayGuide(zone);
   }
-
-  // Preserve SOS-related history (unchanged)
-  lastSpeed = speed;
-  lastAltitude = altitude;
-  lastTimestamp = now;
 }
 
 /************************************************
- * LOCATION ERROR
+ * 4. ERROR HANDLING & UTILS
  ************************************************/
 function onLocationError(error) {
   console.warn("Location error:", error);
-
   if (error.code === error.PERMISSION_DENIED) {
-    alert(
-      "Location permission is required for live monitoring.\n" +
-      "Please enable it in browser settings."
-    );
+    alert("Location permission is required for live monitoring.");
   }
 }
 
 /************************************************
- * DISTANCE HELPER (HAVERSINE)
- ************************************************/
-function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) *
-    Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-/************************************************
- * OVERLAY UI (UNCHANGED, BUT FIXED CENTER)
+ * 5. OVERLAY UI FUNCTIONS (Unchanged)
  ************************************************/
 function showOverlayGuide(zone) {
   overlayActive = true;
 
   const container = document.createElement("div");
-  container.style.position = "absolute";
-  container.style.left = "50%";
-  container.style.bottom = "140px";
-  container.style.transform = "translateX(-50%)";
-  container.style.background = "white";
-  container.style.padding = "10px 14px";
-  container.style.borderRadius = "12px";
-  container.style.boxShadow = "0 6px 20px rgba(0,0,0,0.15)";
-  container.style.zIndex = "999";
-  container.style.fontFamily = "system-ui, sans-serif";
-  container.style.maxWidth = "260px";
-  container.style.textAlign = "center";
+  // Basic Styling
+  Object.assign(container.style, {
+    position: "absolute", left: "50%", bottom: "140px",
+    transform: "translateX(-50%)", background: "white",
+    padding: "10px 14px", borderRadius: "12px",
+    boxShadow: "0 6px 20px rgba(0,0,0,0.15)",
+    zIndex: "999", fontFamily: "system-ui, sans-serif",
+    maxWidth: "260px", textAlign: "center"
+  });
 
   const title = document.createElement("div");
-  title.style.fontSize = "14px";
   title.style.fontWeight = "600";
   title.style.marginBottom = "4px";
 
@@ -219,55 +219,23 @@ function showOverlayGuide(zone) {
     title.textContent = "Moderate safety zone";
     sub.textContent = "Lower activity and changing surroundings";
   } else {
-    title.textContent = "Higher risk area";
-    sub.textContent = "Surroundings are less predictable here";
+    title.textContent = "⚠️ High Risk Area";
+    sub.textContent = "You have entered a designated danger zone.";
   }
 
   const skip = document.createElement("div");
-  skip.textContent = "Skip";
+  skip.textContent = "Dismiss";
   skip.style.marginTop = "6px";
-  skip.style.fontSize = "12px";
   skip.style.color = "#1d3557";
   skip.style.cursor = "pointer";
   skip.style.fontWeight = "600";
-
   skip.onclick = removeOverlayGuide;
 
   container.appendChild(title);
   container.appendChild(sub);
   container.appendChild(skip);
-
   document.body.appendChild(container);
   overlayElements.push(container);
-}
-
-function generateMockSafeSpots(center) {
-  return [
-    { lat: center.lat + 0.00005, lng: center.lng + 0.00003 },
-    { lat: center.lat - 0.00004, lng: center.lng + 0.00006 },
-    { lat: center.lat + 0.00006, lng: center.lng - 0.00004 }
-  ];
-}
-
-function addSkipOverlayButton() {
-  const btn = document.createElement("button");
-  btn.innerText = "Skip";
-  btn.style.position = "absolute";
-  btn.style.top = "20px";
-  btn.style.right = "20px";
-  btn.style.zIndex = "999";
-  btn.style.padding = "8px 14px";
-  btn.style.borderRadius = "20px";
-  btn.style.border = "none";
-  btn.style.fontWeight = "600";
-  btn.style.cursor = "pointer";
-  btn.style.background = "rgba(0,0,0,0.7)";
-  btn.style.color = "white";
-
-  btn.onclick = removeOverlayGuide;
-
-  document.body.appendChild(btn);
-  overlayElements.push(btn);
 }
 
 function removeOverlayGuide() {
@@ -275,16 +243,15 @@ function removeOverlayGuide() {
   overlayElements = [];
   overlayActive = false;
 }
+
 function triggerSOS(reason) {
   sosTriggered = true;
-
   localStorage.setItem("sosReason", reason);
   localStorage.setItem("riskLevel", "danger");
   localStorage.setItem("safetyScore", 5);
-
   window.location.href = "sos.html";
 }
+
 function goHome() {
   window.location.href = "home.html";
 }
-
